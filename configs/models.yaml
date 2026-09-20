@@ -1,0 +1,24 @@
+# Model ids pinned to a specific HF revision sha, fetched at build time via:
+#   HfApi().model_info("BAAI/bge-m3").sha
+# Pinning avoids silent drift if the checkpoint on HF is updated later --
+# without `revision=`, reproducibility for the grader is not guaranteed.
+#
+# Fetched on 2026-09-19.
+
+bi_encoder:
+  name: "BAAI/bge-m3"
+  revision: "5617a9f61b028005a4858fdac845db406aefb181"
+  n_layers: 24
+  hidden_size: 1024
+  # bge-m3 prefixing: unlike bge-v1.5, bge-m3 does NOT require an
+  # "instruction:" prefix for queries -- confirm against the FlagEmbedding
+  # README at implementation/training time (§11 risk 3). Left explicit here
+  # so it's a one-line change if that assumption turns out wrong.
+  query_instruction: ""
+  passage_instruction: ""
+
+reranker:
+  name: "BAAI/bge-reranker-v2-m3"
+  revision: "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+  n_layers: 24
+  hidden_size: 1024

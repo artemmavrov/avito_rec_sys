@@ -1,0 +1,148 @@
+# Pipeline hyperparameters, frozen per reports/02_architectures.md.
+# This is the "production" profile used for real runs (local CPU stages now,
+# GPU stages on the rented 3090 later). See smoke_test.yaml for the tiny
+# local-GPU profile used only to exercise the training code paths.
+
+paths:
+  data_dir: "../../data"
+  train_parquet: "../../data/train.parquet"
+  benchmark_queries_parquet: "../../data/benchmark_queries.parquet"
+  benchmark_items_parquet: "../../data/benchmark_items.parquet"
+  work_dir: "../../work"          # intermediate artifacts (parquet/npy/memmap caches)
+  reports_dir: "../../reports"
+  answer_csv: "../answer.csv"     # final submission file (repo root)
+
+seed: 42
+
+# --- §5.2 train cleaning ---
+cleaning:
+  cap_pairs_per_query: 16
+
+# --- §9 validation split ---
+split:
+  n_validation_queries: 2500      # val: measurement + early stopping
+  n_ranker_queries: 8000          # separate hold-out to train CatBoost (encoders never see it)
+  seen_fraction: 0.385            # share of hold-out queries whose text also occurs in train (benchmark: 945/2452)
+
+# --- §3.1 text fields / truncation (tokens) ---
+text:
+  query_max_tokens: 48
+  item_max_tokens: 128
+  cross_encoder_max_tokens: 192
+
+# --- §6.1 RRF fusion ---
+rrf:
+  k: 200
+  # per-tour weights are tuned on validation (CPU search, stages 5 and 9); these are
+  # the defaults used until the tuning writes work/rrf_weights_*.json. ColBERT is not a
+  # tour: it narrows the fused pool (1000 -> 300).
+  weights:
+    bm25f: 1.0
+    dense: 1.0
+    sparse: 1.0
+
+# --- pool sizes, §1 / §6 ---
+pool_sizes:
+  retrieval_k: 1000     # RRF fusion output
+  colbert_k: 300        # after ColBERT MaxSim narrowing
+  reranker_k: 300        # cross-encoder reads this many (best by ColBERT). Set 250 if the §12.1 gate
+                         # opens and the GPU budget approaches 10.3 h of the 10 h limit (-23 min per 2.5k queries)
+  output_k: 50            # final answer size
+
+# Pool merge (retrieval/pool.py): local, global and "global within a radius of the query location"
+# rankings are merged by reciprocal rank instead of "all local first". On validation the 300-pool
+# goes 0.924 -> 0.973 Recall (radius 60-150 km is flat; see reports/04_gpu_run_log.md).
+pool_merge:
+  rrf_k: 60
+  near_radius_km: 100
+  near_weight: 1.0
+
+# ColBERT narrowing gate (stage 5): ColBERT replaces plain RRF truncation only if its
+# top-300 loses no more than this much Recall vs the first 300 of the RRF pool.
+narrowing:
+  max_loss_pp: 0.5
+
+# --- §6.3 adaptive slot allocation ---
+slots:
+  small_local_pool_threshold: 1000
+  small_pool_global_reserve_min: 5
+  small_pool_global_reserve_max: 10
+  large_pool_local_slots: 40
+  large_pool_global_slots: 10
+  output_k: 50
+
+# --- §5.1 freezing scheme (applies to both bi-encoder and reranker) ---
+freezing:
+  freeze_embeddings: true
+  frozen_layers: 6        # of 24 total transformer layers
+
+# --- §5.4 bi-encoder fine-tuning ---
+biencoder_train:
+  loss: "MultipleNegativesRankingLoss"
+  temperature: 0.05
+  optimizer: "AdamW"
+  lr: 1.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-6
+  scheduler: "linear_warmup"
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  precision: "bf16"
+  gradient_checkpointing: true
+  batch_size_groups: 256
+  docs_per_group: 3
+  epochs: 2
+  checkpoint_every_steps: 200
+  hard_negatives_per_positive: 2
+  negative_rank_min: 10
+  negative_rank_max: 200
+  # The second epoch restarts from epoch-1 weights (two separate runs, see s07), so it uses a
+  # gentler schedule: lower peak lr and a short warmup instead of repeating epoch 1's 5%.
+  epoch2:
+    lr: 5.0e-6
+    warmup_ratio: 0.01
+
+# --- §5.5 cross-encoder fine-tuning ---
+reranker_train:
+  positives_per_query: 2
+  negatives_per_positive: 4
+  negative_rank_min: 5
+  negative_rank_max: 300
+  lr: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-6
+  scheduler: "linear_warmup"
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  precision: "bf16"
+  gradient_checkpointing: true
+  batch_size_pairs: 64
+  epochs: 1
+  checkpoint_every_steps: 200
+
+# --- §4 CatBoost ranker ---
+catboost:
+  loss_function: "YetiRank"
+  iterations: 3000
+  early_stopping_rounds: 200
+  learning_rate: 0.05
+  depth: 8
+  task_type: "CPU"
+  candidates_per_query: 300       # pool size the ranker sees (local 150-200 + global 100 + log candidates)
+  # The cross-encoder scores every training row, ~360 pairs/s on a 3090 (§7: 34 min per 735k pairs).
+  # Rows are thinned BEFORE scoring so more queries fit in the same budget: 8000 queries x 130
+  # rows instead of 3500 x 300. Pool-relative features are computed on the full pool first, all
+  # positives are kept, negatives are half hardest (by ColBERT) / half random. The last
+  # `es_fraction` of queries is NOT thinned: early stopping runs on full pools, the same
+  # distribution the ranker meets at inference.
+  train_queries: 8000
+  train_rows_per_query: 130
+  es_fraction: 0.1
+  # Lexical-only local runs (no CE) use the whole hold-out (see scripts/s04_catboost_lexical.py).
+
+# --- §12.1 gate before reranker fine-tuning ---
+reranker_gate:
+  recall_gap_no_finetune_below_pp: 3.0
+  recall_gap_finetune_above_pp: 10.0

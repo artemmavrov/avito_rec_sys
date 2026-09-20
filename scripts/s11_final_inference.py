@@ -12,6 +12,10 @@
 Flags: --zero-shot-ce  use the base reranker (when the §12.1 gate says skip).
        --no-ce  drop the ce_logit column from the ranker (it added nothing measurable, see reports/04)
        --iterations N  fixed CatBoost iterations on ALL ranker queries, no early stopping
+       --pool-k K  set BOTH pool_sizes.colbert_k and pool_sizes.reranker_k to K (the pool is cut by
+           min of the two, see neural_pipeline.run_stage). Writes feats_*_k{K}.parquet, catboost_final_k{K}.cbm,
+           answer_k{K}.csv and s11_results_k{K}.json, and does NOT overwrite the repo's answer.csv.
+           With --no-ce the training pools are not thinned (thinning only exists to cap cross-encoder work).
        --features-only STAGE  (ranker | val | test) only build and cache that stage's feature table.
            Stages are independent, so running the three concurrently on one GPU hides each one's
            CPU-only phases (indexes, BM25, feature bank) behind another's cross-encoder scoring;
@@ -61,15 +65,15 @@ def make_thin(stage, rows_per_query: int, es_fraction: float, seed: int):
     return thin
 
 
-def stage_features(ctx, name, master, bi, ce, field_weights, rrf_weights, max_queries=None, thin_cfg=None):
-    """Features for a stage, cached on disk. Returns (stage, items, queries, feats)."""
+def stage_features(ctx, name, master, bi, ce, field_weights, rrf_weights, max_queries=None, thin_cfg=None, tag=""):
+    """Features for a stage, cached on disk. Returns (stage, items, queries, feats). `ce` may be None."""
     stage, index, store = stage_inputs(ctx, name, master, max_queries)
-    cache = ctx.work / f"feats_{name}.parquet"
+    cache = ctx.work / f"feats_{name}{tag}.parquet"
     if cache.exists():
         feats = pd.read_parquet(cache)
     else:
         thin = make_thin(stage, **thin_cfg) if thin_cfg else None
-        feats = run_full_stage(ctx, stage, index, store, bi, ce.score, field_weights, rrf_weights, thin=thin).feats
+        feats = run_full_stage(ctx, stage, index, store, bi, ce.score if ce else None, field_weights, rrf_weights, thin=thin).feats
         feats.to_parquet(cache)
     items = ItemTable(stage.corpus, index.vocab)
     queries = QueryTable(stage.queries, stage.centroids)
@@ -82,9 +86,13 @@ def main() -> None:
     ap.add_argument("--features-only", choices=["ranker", "val", "test"])
     ap.add_argument("--no-ce", action="store_true")
     ap.add_argument("--iterations", type=int, default=None)
+    ap.add_argument("--pool-k", type=int, default=None)
     args = ap.parse_args()
 
     cfg, models = load_config(), load_models_config()
+    if args.pool_k:
+        cfg["pool_sizes"]["colbert_k"] = cfg["pool_sizes"]["reranker_k"] = args.pool_k
+    pool_tag = f"_k{args.pool_k}" if args.pool_k else ""
     t0 = time.time()
     ctx = build_context(cfg)
     ft_dir = str(final_model_dir(ctx.work / "biencoder_ft" / "epoch2"))
@@ -93,26 +101,31 @@ def main() -> None:
     rrf_weights = load_json(ctx.work / "rrf_weights_ft.json", cfg["rrf"]["weights"])
     print("rrf weights:", rrf_weights)
 
-    ce_path = resolve_snapshot(models["reranker"]["name"], models["reranker"]["revision"])
-    if not args.zero_shot_ce:
-        ckpts = sorted((ctx.work / "reranker_ft").glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
-        ce_path = str(ckpts[-1])
-    print("cross-encoder:", ce_path)
+    ce = None  # not even loaded with --no-ce: ce_logit is a constant column then
+    if not args.no_ce:
+        ce_path = resolve_snapshot(models["reranker"]["name"], models["reranker"]["revision"])
+        if not args.zero_shot_ce:
+            ckpts = sorted((ctx.work / "reranker_ft").glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
+            ce_path = str(ckpts[-1])
+        print("cross-encoder:", ce_path)
+        ce = CrossEncoderScorer(ce_path, max_length=cfg["text"]["cross_encoder_max_tokens"])
     bi = load_bi_encoder(models, model_path=ft_dir)
-    ce = CrossEncoderScorer(ce_path, max_length=cfg["text"]["cross_encoder_max_tokens"])
+    print("pool sizes:", cfg["pool_sizes"])
 
     cb = cfg["catboost"]
-    thin_cfg = {"rows_per_query": cb["train_rows_per_query"], "es_fraction": cb["es_fraction"], "seed": cfg["seed"]}
+    thin_cfg = None if args.no_ce else {
+        "rows_per_query": cb["train_rows_per_query"], "es_fraction": cb["es_fraction"], "seed": cfg["seed"]
+    }
     if args.features_only:
         is_ranker = args.features_only == "ranker"
         stage_features(ctx, args.features_only, master, bi, ce, field_weights, rrf_weights,
-                       cb["train_queries"] if is_ranker else None, thin_cfg if is_ranker else None)
+                       cb["train_queries"] if is_ranker else None, thin_cfg if is_ranker else None, pool_tag)
         print(f"features cached: {args.features_only}; total {(time.time() - t0) / 60:.0f} min")
         return
 
     # ---- 1-2. train the ranker
     stage, items, queries, feats = stage_features(
-        ctx, "ranker", master, bi, ce, field_weights, rrf_weights, cb["train_queries"], thin_cfg
+        ctx, "ranker", master, bi, ce, field_weights, rrf_weights, cb["train_queries"], thin_cfg, pool_tag
     )
     y = labels_for(feats, items, stage.queries["query_id"].to_list(), stage.qrels)
     print(f"ranker: {len(feats)} pairs, positives in pool {int(y.sum())}/{sum(len(v) for v in stage.qrels.values())}")
@@ -123,7 +136,7 @@ def main() -> None:
     if args.iterations:  # fixed iterations, every ranker query is training data
         cb_cfg.update(iterations=args.iterations, early_stopping_rounds=0)
         tr = feats["q"] >= 0
-    tag = "_v2" if (args.no_ce or args.iterations) else ""  # keeps the v1 artifacts intact
+    tag = pool_tag or ("_v2" if (args.no_ce or args.iterations) else "")  # keeps the v1/v2 artifacts intact
     model = train_ranker(feats[tr], y[tr], feats[va], y[va], columns, cb_cfg, cfg["seed"])
     model.save_model(str(ctx.work / f"catboost_final{tag}.cbm"))
     imp = sorted(
@@ -134,7 +147,7 @@ def main() -> None:
     gc.collect()
 
     # ---- 3. validation
-    stage, items, queries, feats = stage_features(ctx, "val", master, bi, ce, field_weights, rrf_weights)
+    stage, items, queries, feats = stage_features(ctx, "val", master, bi, ce, field_weights, rrf_weights, tag=pool_tag)
     qrels = stage_qrels(stage)
     val_scores = predict_scores(model, feats, columns)
     # two selection rules, the better one on validation is used for the benchmark
@@ -165,7 +178,7 @@ def main() -> None:
     gc.collect()
 
     # ---- 4. benchmark answer
-    stage, items, queries, feats = stage_features(ctx, "test", master, bi, ce, field_weights, rrf_weights)
+    stage, items, queries, feats = stage_features(ctx, "test", master, bi, ce, field_weights, rrf_weights, tag=pool_tag)
     test_scores = predict_scores(model, feats, columns)
     preds = (select_plain(feats, test_scores, items, queries, cfg["slots"]["output_k"]) if selection == "plain"
              else select_top(feats, test_scores, items, queries, cfg["slots"]))
@@ -173,7 +186,7 @@ def main() -> None:
     out = write_answer(ctx.work / f"answer{tag}.csv", qids, {qids[q]: preds[q] for q in range(queries.n)})
     problems = validate_answer(out, qids, set(items.ids))
     print("answer.csv problems:", problems or "none", "| empty answers:", sum(1 for p in preds if not p))
-    if not problems:
+    if not problems and not args.pool_k:  # a pool-size experiment never replaces the submitted answer.csv
         shutil.copy(out, resolve_path(cfg, "answer_csv"))
     print(f"total {(time.time() - t0) / 60:.0f} min")
 

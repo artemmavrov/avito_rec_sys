@@ -15,7 +15,8 @@ query (text + filters + location + category)
 RRF merge of the three lists -> pool of 300 (+ log candidates: q->item, title bridge from train)
   v
 feature bank (35 lexical/geo/log features + dense / sparse / ColBERT scores, their in-pool ranks)
-  + bge-reranker-v2-m3 cross-encoder logit
+  (+ bge-reranker-v2-m3 cross-encoder logit: fine-tuned and available, but the submitted ranker is built
+   with --no-ce because the logit added nothing measurable, see reports/04)
   v
 CatBoost YetiRank (Recall@50 early stopping)
   v
@@ -76,7 +77,8 @@ python scripts/s10_train_reranker.py               # only if the gate says so (~
 # so they can be run as concurrent processes to overlap CPU phases with cross-encoder scoring:
 python scripts/s11_final_inference.py --features-only ranker &
 python scripts/s11_final_inference.py --features-only val && python scripts/s11_final_inference.py --features-only test
-python scripts/s11_final_inference.py [--zero-shot-ce]   # trains CatBoost, writes answer.csv and validates it
+python scripts/s11_final_inference.py --no-ce --iterations 600   # submitted variant: CatBoost, writes answer.csv, validates it
+# (plain `s11_final_inference.py [--zero-shot-ce]` keeps the cross-encoder feature and early stopping)
 ```
 
 `AVITO_WORKERS` (default: cores - 2, at most 14) sets the number of forked processes for the ColBERT MaxSim step.

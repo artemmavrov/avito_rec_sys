@@ -1,12 +1,12 @@
 """Candidate-pool construction: merge the local and global rankings with a geo-aware third list.
 
-Before this the pool was "the whole local ranking first, then the global one", cut to the
-reranker budget. On the validation hold-out every positive the local part could reach was
-already inside 300 (1 miss in 2 683), while 22.6% of positives sit outside the search
-location and were pushed out by the local list. Merging by reciprocal rank instead, with a
-third list of global candidates lying within a radius of the query location, keeps the
-same budget and recovers most of them (Recall of the 300-pool 0.924 -> 0.973, see
-reports/04_gpu_run_log.md).
+The naive pool is "the whole local ranking first, then the global one", cut to the pool size.
+On the validation hold-out every positive the local part could reach was already inside 300
+(1 miss in 2 683), while 22.6% of positives sit outside the search location and were pushed
+out by the local list. Merging by reciprocal rank instead, with a third list of global
+candidates lying within a radius of the query location, keeps the same budget and recovers
+most of them (Recall of a 300-pool 0.924 -> 0.973 together with the click-based location
+centroids of `features/tables.py`).
 """
 
 from __future__ import annotations

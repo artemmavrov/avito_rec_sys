@@ -1,10 +1,9 @@
-"""Multi-field BM25 over lemmas (§3.1 / §4).
+"""Multi-field BM25 over lemmas.
 
 Three independent BM25 indices (title, filtered params, full description)
-share one vocabulary. `bm25f_total` is their weighted sum. This is the
-"BM25F-lite" form the feature bank in §4 implies: it lists the per-field
-scores as separate features next to the total, so a true term-level field
-fusion would throw away information the ranker is given anyway.
+share one vocabulary. `bm25f_total` is their weighted sum ("BM25F-lite"). The
+per-field scores are also given to the ranker as separate features, which a
+true term-level field fusion would throw away.
 
 Implementation is a precomputed sparse weight matrix per field:
     W[d, t] = idf(t) * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len_d / avg_len))

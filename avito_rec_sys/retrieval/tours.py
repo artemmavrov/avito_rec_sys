@@ -1,4 +1,4 @@
-"""Dense and sparse retrieval tours over a pre-encoded corpus (§1).
+"""Dense and sparse retrieval tours over a pre-encoded corpus.
 
 Each tour returns, per query, a best-first GLOBAL ranking and a best-first
 LOCAL ranking (restricted to the query's location) -- the same shape the

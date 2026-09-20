@@ -1,4 +1,4 @@
-"""Signals mined from the training logs (§1 "лог-сигналы").
+"""Signals mined from the training logs (query -> chosen items).
 
 Built ONLY from the training part of a split, never from held-out queries.
 
@@ -67,7 +67,7 @@ def log_candidate_positions(queries, items, logs: QueryLogs, cap_per_title: int 
     """Corpus positions suggested by the logs for each query (q->item + title bridge).
 
     For a bridge title shared by many corpus items, same-location items are
-    taken first: geo is what separates members of a duplicate cluster (§6.3).
+    taken first: geo is what separates members of a duplicate cluster.
     """
     out: list[np.ndarray] = []
     for q in range(queries.n):

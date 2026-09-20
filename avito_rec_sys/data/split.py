@@ -1,10 +1,10 @@
-"""Leak-free query hold-outs (§9), built to mirror how the benchmark looks.
+"""Leak-free query hold-outs, built to mirror how the benchmark looks.
 
 Facts measured on the real data that drive the design:
 
 - Split key is the NORMALIZED query text (word-sorted), never the raw string:
   3.3% of normalized queries have several raw spellings and cover 25.4% of
-  pairs, so splitting on raw text leaks positives into train (§9.1).
+  pairs, so splitting on raw text leaks positives into train.
 - A query is one full `search_*` tuple (text + location + delivery flag +
   filters + category). The benchmark has 2,452 tuples over 2,448 distinct
   normalized texts, i.e. ~1 tuple per text (train averages 4.9), so each
@@ -15,10 +15,10 @@ Facts measured on the real data that drive the design:
   logs (q->item, title bridge, p(microcat|query)). So a `seen_fraction` of
   hold-out queries keep their text in the training part (only that tuple
   and its positives are removed) and the rest are removed with all their
-  tuples. Metrics are reported per stratum (§9.4).
-- Positives of held-out queries are removed from the training part entirely
-  (§9.2): only ~9.6% of benchmark corpus items ever appear in train.
-- Two disjoint hold-outs are made: `val` (measure / early-stop) and
+  tuples. Metrics are reported per stratum.
+- Positives of held-out queries are removed from the training part entirely:
+  only ~9.6% of benchmark corpus items ever appear in train.
+- Two disjoint hold-outs are made: `val` (measurement) and
   `ranker` (train CatBoost). The encoders are trained on neither, otherwise
   the ranker would learn to over-trust neural scores on pairs the encoders
   memorised.
@@ -83,7 +83,7 @@ def _hold_out(
 ) -> tuple[pl.DataFrame, HeldOut, int]:
     tuples = (
         df.group_by(["search_query_norm", *QUERY_COLUMNS])
-        .agg(pl.col("item_id").unique().alias("item_ids"))
+        .agg(pl.col("item_id").unique(maintain_order=True).alias("item_ids"))
         .sort(["search_query_norm", *QUERY_COLUMNS])  # deterministic before sampling
     )
     n_tuples_per_text = tuples.group_by("search_query_norm").len().rename({"len": "n_tuples"})
@@ -114,7 +114,7 @@ def _hold_out(
     qrels = chosen.select(["query_id", "item_ids"]).explode("item_ids").rename({"item_ids": "item_id"})
     positive_ids = set(qrels["item_id"].to_list())
     positive_items = (
-        df.filter(pl.col("item_id").is_in(positive_ids)).select(ITEM_COLUMNS).unique(subset=["item_id"])
+        df.filter(pl.col("item_id").is_in(positive_ids)).select(ITEM_COLUMNS).unique(subset=["item_id"], maintain_order=True)
     )
 
     # new texts leave the training part with every tuple; seen texts lose only

@@ -1,95 +1,239 @@
-# Candidate generation for Avito service search
+# Кандидатогенерация для поиска услуг Авито
 
-For every search query, return up to 50 `item_id`s from a corpus of 189k service ads. Metric: Recall@50.
+Для каждого поискового запроса решение возвращает до 50 `item_id` из корпуса в 189 212 объявлений услуг.
+Метрика — Recall@50. Решение — каскад: несколько «туров» поиска собирают широкий пул кандидатов,
+CatBoost-ранкер один раз в конце отбирает из пула 50.
 
-The solution is a cascade. Recall matters most at this stage, so every stage keeps a wide pool and the cut to 50 happens once, at the end.
+- [Запуск инференса](#запуск-инференса) — как получить `answer.csv`
+- [Описание решения](#описание-решения) — данные и признаки, модели, проверка качества, найденные ошибки
+- [Использованные open-source компоненты](#использованные-open-source-компоненты)
+- [Воспроизведение обучения](#воспроизведение-обучения)
+- [Структура репозитория](#структура-репозитория)
 
-```
-query (text + filters + location + category)
-  |-- BM25 over lemmas, 3 fields (title / filtered params / description)  --.
-  |-- bge-m3 dense                                                         |-- weighted RRF per ranking (local, global)
-  |-- bge-m3 sparse (lexical weights)                                     --'
-  |        + list of global candidates within 100 km of the query location
-  |          (location centroid from corpus items, else from train clicks)
-  v
-RRF merge of the three lists -> pool of 300 (+ log candidates: q->item, title bridge from train)
-  v
-feature bank (35 lexical/geo/log features + dense / sparse / ColBERT scores, their in-pool ranks)
-  (+ bge-reranker-v2-m3 cross-encoder logit: fine-tuned and available, but the submitted ranker is built
-   with --no-ce because the logit added nothing measurable, see reports/04)
-  v
-CatBoost YetiRank (Recall@50 early stopping)
-  v
-top 50 by ranker score (a local/global slot quota is also evaluated; the better one on validation is used)
-```
+---
 
-Both neural models are fine-tuned on the training pairs (frozen embedding table + 6 lowest layers).
+## Запуск инференса
 
-## Open-source components used
+Инференс полностью локальный: обращений к внешним API нет. Из сети скачиваются только веса моделей
+(один раз): обученные веса с Google Drive и несколько мелких файлов токенизатора базовой модели `BAAI/bge-m3`
+с Hugging Face.
 
-| Component | Use | License |
-|---|---|---|
-| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (pinned revision in `configs/models.yaml`) | dense + sparse + ColBERT bi-encoder, fine-tuned locally | MIT |
-| [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) (pinned) | cross-encoder, fine-tuned locally | MIT |
-| [FlagEmbedding](https://github.com/FlagOpen/FlagEmbedding) | bge-m3 inference wrapper and its unified dense+sparse+ColBERT fine-tuning trainer | MIT |
-| PyTorch, Hugging Face `transformers`, `accelerate` | model code, training loop | BSD / Apache-2.0 |
-| CatBoost | ranking model (YetiRank) | Apache-2.0 |
-| pymorphy3 (+ `pymorphy3-dicts-ru`) | Russian lemmatization for lexical features | MIT |
-| polars, pandas, pyarrow, NumPy, SciPy | data handling, sparse BM25 | BSD / Apache-2.0 |
-
-The multi-field BM25, RRF, slot allocation, feature bank, negative mining and the validation protocol are written for this task. No external API is called at any point; after the model weights are downloaded once, everything runs offline.
-
-## Layout
-
-```
-configs/            pipeline.yaml (all hyper-parameters), models.yaml (model ids + revisions), smoke_test.yaml
-avito_rec_sys/
-  data/             loading, query normalization, item-params parser, train cleaning, leak-free split, lemmatization
-  features/         multi-field BM25, tables, log signals, the feature bank
-  retrieval/        bge-m3 wrapper, dense/sparse tours, RRF, ColBERT narrowing, slots, cross-encoder scorer
-  training/         bi-encoder + cross-encoder fine-tuning, hard-negative mining, CatBoost, layer freezing
-  inference/        stage pipelines, slot selection, answer writer + validator
-  eval/             Recall@K, strata, ceiling curves
-scripts/            s01 ... s11, one per pipeline stage (see below)
-tests/              unit tests + GPU smoke tests
-```
-
-## Reproduce
+**Требования.** Python 3.12, GPU с CUDA (проверено на Tesla T4 15 ГБ), ≥ 16 ГБ RAM, ≈ 25 ГБ свободного диска
+(кэш закодированного корпуса 20 ГБ, веса 2.2 ГБ). Без GPU кодирование корпуса займёт много часов. Полный прогон на T4 — около 15 минут.
 
 ```bash
-pip install -r requirements.txt          # torch: use the CUDA wheel matching your driver
-pytest tests -m "not gpu"                # CPU unit tests
+git clone https://github.com/artemmavrov/avito_rec_sys.git && cd avito_rec_sys
+pip install -r requirements.txt   # torch — колесо CUDA под ваш драйвер, см. комментарий в requirements.txt
 
-# CPU stages (validated locally): splits, cleaning, BM25 baseline, lexical CatBoost, baseline answer
-python scripts/s01_split_and_normalize.py
-python scripts/s02_clean_lemmatize_params.py
-python scripts/s03_bm25f_baseline.py
-python scripts/s04_catboost_lexical.py
-
-# GPU stages (one 24 GB GPU; see reports/ for the time budget and measured timings)
-python scripts/s05_zeroshot_biencoder.py [--cpu]   # zero-shot encode + ceiling curve + RRF weights
-python scripts/s06_mine_hard_negatives.py
-python scripts/s07_train_biencoder.py              # 2 epochs, negative refresh between them (~2.2 h on a 3090)
-python scripts/s08_reencode_mine_pools.py [--store-only]   # store_ft, then cross-encoder training groups
-python scripts/s09_zeroshot_reranker_eval.py [--max-queries 1200]   # gate: is cross-encoder fine-tuning worth it?
-python scripts/s10_train_reranker.py               # only if the gate says so (~1.3 h)
-# s11 builds feature tables per stage (cached in work/feats_*.parquet); the three stages are independent,
-# so they can be run as concurrent processes to overlap CPU phases with cross-encoder scoring:
-python scripts/s11_final_inference.py --features-only ranker &
-python scripts/s11_final_inference.py --features-only val && python scripts/s11_final_inference.py --features-only test
-python scripts/s11_final_inference.py --no-ce --iterations 600   # submitted variant: CatBoost, writes answer.csv, validates it
-# (plain `s11_final_inference.py [--zero-shot-ce]` keeps the cross-encoder feature and early stopping)
+# в --data-dir лежат train.parquet, benchmark_queries.parquet, benchmark_items.parquet
+python predict.py --data-dir /path/to/data
 ```
 
-`AVITO_WORKERS` (default: cores - 2, at most 14) sets the number of forked processes for the ColBERT MaxSim step.
-On a 24 GB card the bi-encoder fine-tuning at 256 groups per batch relies on two memory patches to FlagEmbedding's M3
-trainer (`sparse_embedding_lowmem`, `colbert_score_chunked` in `training/biencoder_train.py`); both are covered by tests.
+Скрипт делает всё сам:
 
-Data is read from `../data`, intermediate artifacts go to `../work` (paths in `configs/pipeline.yaml`).
-All training stages are resumable from their last checkpoint.
+1. скачивает веса с Google Drive через `gdown` и проверяет их sha256 (повторный запуск ничего не качает);
+2. лемматизирует объявления и кодирует корпус дообученной bge-m3 (dense + sparse + ColBERT) — кэшируется в `--work-dir`;
+3. строит пул кандидатов для каждого из 2 452 запросов и признаки;
+4. ранжирует CatBoost-моделью, оставляет 50 лучших;
+5. пишет `answer.csv`, проверяет его формат (колонки, повторы, ≤ 50 id, id существуют в корпусе) и сравнивает с
+   отправленным ответом `reference/answer.csv`.
 
-`pytest tests -m gpu` runs small real-model smoke tests (a few training steps, checkpoint save/reload, an end-to-end pipeline slice); it needs a CUDA GPU with ~4 GB.
+| Флаг | Назначение |
+|---|---|
+| `--data-dir` | каталог с тремя parquet-файлами (по умолчанию `./data`; или переменная `AVITO_DATA_DIR`) |
+| `--work-dir` | кэш (закодированный корпус, лемматизация); по умолчанию `./work` |
+| `--weights-dir` | куда скачиваются веса; по умолчанию `./weights` |
+| `--output` | путь к результату; по умолчанию `./answer.csv` |
+| `--encoder-dir`, `--ranker-model` | использовать собственные, переобученные веса (см. «Воспроизведение обучения») |
 
-## Validation protocol
+Веса, если Google Drive недоступен (лимит скачиваний), можно взять вручную из
+[папки](https://drive.google.com/drive/folders/1YdR1OndTeS1mNKDCkiLKo5DTFA_G6Cfv) и положить в
+`weights/bge-m3-finetuned/` (`model.safetensors`, `sparse_linear.pt`, `colbert_linear.pt`) и `weights/` (`catboost_final_k600.cbm`).
 
-The hold-outs are built to look like the benchmark (see `avito_rec_sys/data/split.py`): split on the *normalized* query text (word-sorted, so spelling variants cannot leak), one random `search_*` tuple per held-out text, 38.5% of hold-out queries keep their text in train (as in the benchmark) and the rest do not, held-out positives are removed from the training part, and the distractor pool is the real benchmark corpus. Two disjoint hold-outs are used: `val` for measurement and `ranker` for training CatBoost, so the ranker never sees encoder-memorised pairs.
+**Проверка воспроизведения** (чистая машина: Tesla T4 15 ГБ, 16 vCPU, 16 ГБ RAM, пустой `--work-dir`, веса скачаны скриптом):
+
+| Этап | Время |
+|---|---|
+| лемматизация + кодирование корпуса (один раз, кэшируется) | ≈ 10 мин |
+| пулы кандидатов, признаки, ранжирование, запись | ≈ 5 мин |
+
+Пик RSS — 13.7 ГБ (включая страницы memmap-хранилища), диск: хранилище 20 ГБ + веса 2.2 ГБ. Формат `answer.csv` проходит
+встроенный валидатор. Сравнение с отправленным ответом: **в среднем 99.3 % общих id на запрос (Jaccard), у 83.7 % запросов
+множества из 50 id совпадают полностью**.
+
+Остаточное расхождение — шум fp16, а не ошибка кода: корпус кодируется в fp16, и результат зависит от GPU и состава батчей
+(отправленный ответ считался на другой видеокарте и для чуть большего корпуса). Если подставить в тот же код
+закодированный корпус исходного прогона, `answer.csv` совпадает с отправленным **полностью** (все 2 452 множества, 1 479 272
+пар «запрос — кандидат» с теми же признаками). Поэтому на любой другой видеокарте следует ожидать те же доли процента
+расхождений на границе топ-50, а не ту же файловую бит-в-бит копию.
+
+---
+
+## Описание решения
+
+### Какие данные и признаки использованы и почему
+
+Особенности данных, из которых вытекают решения (замеры на `train.parquet` и бенчмарке):
+
+- **90.4 % объявлений корпуса никогда не встречались в train**, а 61.5 % запросов бенчмарка — новые тексты. Запоминание
+  «запрос → объявление» не работает, нужен поиск по содержанию; клики из train используются как вспомогательный сигнал.
+- **83 % кликов — объявления из локации поиска, 17 % — нет**, 17 % запросов ищут в локации, где в корпусе вообще нет
+  объявлений. Жёсткий фильтр по локации потерял бы эти запросы, поэтому локация — сильный *признак*, а не фильтр.
+- **36.6 % заголовков в корпусе повторяются** (кластеры дублей): различить дубли можно только по гео, цене, рейтингу.
+- Признак `search_is_delivery_search` в бенчмарке константа (всегда 0) — не используется.
+
+Входы моделей:
+
+| Что | Где используется | Зачем |
+|---|---|---|
+| текст запроса + текст фильтров (`search_query`, `search_infm_params_text`) | encoder (query-башня), BM25 | смысл запроса; фильтры («Вид услуги …») пишутся так же, как параметры объявлений |
+| заголовок + отфильтрованные параметры объявления (только ключи «Вид/Тип услуги…») | encoder (item-башня), BM25 | остальные параметры (адреса, прайсы, график) — шум, съедающий лимит в 128 токенов |
+| описание объявления | только BM25 (по леммам) | длинный текст полезен лексическому поиску, но не входит в 128 токенов encoder'а |
+| локация и координаты запроса/объявления | признаки ранкера, «near»-список пула | 83 % кликов локальны, остальные — рядом (медиана 39 км) |
+| категория, микрокатегория | признаки ранкера | априорное распределение микрокатегорий по тексту запроса из train |
+| цена, рейтинг, число отзывов, скрытый телефон | признаки ранкера | «качество» объявления и z-score цены внутри микрокатегории |
+| клики train (запрос → объявления) | кандидаты из логов + признаки ранкера | для 38.5 % запросов текст уже встречался в train |
+
+Всего у ранкера **46 признаков**: лексические (BM25 по трём полям, покрытие запроса заголовком/описанием, триграммное
+сходство, совпадение префикса), гео (совпадение локации, расстояние до центроида локации, ранг расстояния в кластере
+дублей), категории (`p(микрокатегория | запрос)`), качество, дубли (размер кластера, гео-ранг внутри кластера),
+логи, нейросетевые скоры (cosine dense, sparse, ColBERT MaxSim, сходство с центроидом микрокатегории) и их
+ранги/отрывы внутри пула запроса. Сырой скор dense/ColBERT для разных запросов несравним, ранг и отрыв от лучшего
+кандидата — сравнимы.
+
+### Какие модели и алгоритмы применены
+
+```
+запрос (текст + фильтры + локация)
+  |-- BM25 по леммам, 3 поля (заголовок / параметры / описание)   ──┐
+  |-- bge-m3 dense (дообученная)                                    ├─ для каждого тура ранжирование
+  |-- bge-m3 sparse (lexical weights)                              ──┘  локальное (та же локация) и глобальное
+  |                                                                      + список «глобальные в радиусе 100 км от локации»
+  v
+взвешенный RRF (bm25 2.0 / dense 4.0 / sparse 0.0) → слияние локального, глобального и «near» списков → 600 кандидатов
+  + кандидаты из логов (запрос → выбранные объявления, объявления с теми же заголовками)
+  v
+признаки (46 шт., включая ColBERT MaxSim) → CatBoost YetiRank → топ-50 по скору
+```
+
+1. **Лексический тур** — собственный BM25 на scipy (три индекса по леммам `pymorphy3`, общий словарь, сумма со
+   весами title 1.0 / params 0.5 / desc 1.0).
+2. **bge-m3, дообученная** на парах «запрос — выбранное объявление» из train: совместный loss dense + sparse + ColBERT
+   с self-distillation (тренер FlagEmbedding), MNRL-подобная контрастная постановка, температура 0.05, батч из 256 групп
+   «запрос + позитив + 2 жёстких негатива». Негативы — из рангов 10–200 гибридной выдачи (BM25 + dense, RRF), очищенные
+   от объявлений с тем же текстом башни и от любых объявлений, выбранных для того же запроса другими пользователями;
+   после первой эпохи негативы пересобираются моделью первой эпохи. Заморожены таблица эмбеддингов и 6 нижних слоёв из 24.
+3. **RRF и слияние пула** — локальные и глобальные ранжирования туров сливаются отдельно (`k = 200`), затем
+   вместе с «near»-списком (глобальные кандидаты в радиусе 100 км от центроида локации запроса; для локаций без
+   объявлений в корпусе центроид считается по кликам train) — повторным RRF (`k = 60`). Из головы этого ранжирования
+   берётся 600 кандидатов. Слоты «40 локальных + 10 глобальных» проверялись и проиграли простому топ-50 ранкера.
+4. **CatBoost YetiRank** — 600 итераций, глубина 8, lr 0.05, метрика `RecallAt:top=50`; обучается на отдельном
+   hold-out из 8 000 запросов (≈ 4.8 млн строк «запрос — кандидат»), который не видели энкодеры — иначе ранкер научился бы
+   чрезмерно доверять нейросетевым скорам на парах, которые энкодеры запомнили.
+
+### Как проверялось качество до отправки
+
+Локальная валидация построена так, чтобы походить на бенчмарк (`avito_rec_sys/data/split.py`):
+
+- разбиение по **нормализованному** тексту запроса (слова отсортированы), иначе варианты написания одного запроса
+  протекают из train в валидацию;
+- на каждый текст — один случайный кортеж `search_*` (в бенчмарке ≈ 1 запрос на текст, в train — 4.9);
+- **38.5 % запросов hold-out'а сохраняют текст в train** (как в бенчмарке: 945 из 2 452), остальные новые; метрика
+  считается по обоим срезам отдельно;
+- позитивы hold-out'а удалены из обучающей части и из логов; отвлекающая часть корпуса — настоящий `benchmark_items`;
+- два непересекающихся hold-out'а: `val` (2 500 запросов, только измерение) и `ranker` (8 000, обучение CatBoost).
+
+Результаты на `val` (Recall@50), финальная модель:
+
+| | значение |
+|---|---|
+| **Recall@50** | **0.9497** |
+| виденные / новые запросы | 0.957 / 0.945 |
+| потолок пула (доля позитивов внутри 600 кандидатов) | 0.9807 |
+| BM25 отдельно, глобально @50 (для масштаба) | 0.426 |
+
+**Оговорка о валидации.** Она оптимистична: для двух ранее отправленных вариантов val показывал 0.943 / 0.946, а
+закрытый тест дал 0.899 / 0.895 — то есть ≈ 5 п.п. разрыва, причём порядок близких вариантов на тесте оказался обратным.
+Пересчёт валидации на состав запросов бенчмарка объясняет лишь 0.55 п.п. из 5.1, остальное — ненаблюдаемый сдвиг
+между «отложенными кликами train» и выборкой бенчмарка. Поэтому по этой валидации принимались решения только о
+изменениях крупнее ≈ 1 п.п.; различия в 0.2–0.3 п.п. считались неизмеренными.
+
+### Какие типы ошибок найдены при анализе и что с ними сделано
+
+| Ошибка / наблюдение | Что сделано |
+|---|---|
+| **Пул терял позитивы вне локации поиска.** Локальный список вытеснял глобальный: из 2 683 позитивов val пул терял 1 локальный и 208 нелокальных | Слияние локального и глобального списков по reciprocal rank вместо «сначала всё локальное» (потолок пула при K = 300: 0.924 → 0.945), плюс «near»-список глобальных кандидатов в радиусе 100 км (→ 0.957) |
+| **Запросы в локации без объявлений (≈ 17 %) — самый слабый срез** (R@50 0.83 против 0.97): не от чего считать «рядом» | Центроид локации по кликам train (покрытие 84 % → 100 %): потолок пула 0.957 → 0.973 |
+| **ColBERT-сужение пула вредило**: отбор по MaxSim терял 15 п.п. относительно простого усечения RRF (MaxSim ничего не знает о локации) | Сужение убрано, ColBERT остаётся признаком ранкера |
+| **Дообученный кросс-энкодер оказался сломан** (AUC внутри запроса 0.527 ≈ случайность): его «негативы» — на деле корректные ответы на запрос, а различает их локация/цена/рейтинг, которых нет во входе | Кросс-энкодер исключён из финального решения и из репозитория; ранкер строится только на табличных признаках и скорах bi-encoder'а |
+| **Ранняя остановка CatBoost на 300–800 запросах шумная** (в одном прогоне остановилась на 13-й итерации); прореживание строк вредно без кросс-энкодера | Фиксированные 600 итераций на всех 8 000 запросах и полных пулах |
+| **Слоты «локальные/глобальные»** давали −0.5 п.п. к простому топ-50: ранкер сам видит `loc_match` и расстояние | Слоты убраны |
+| **Размер пула** — единственная дешёвая ручка: потолок пула K = 300 / 500 / 600 → 0.973 / 0.980 / 0.981 (насыщение около 500) | K = 600 (val Recall@50 0.9462 → 0.9497; выигрыш внутри шума валидации, но подкреплён ростом потолка) |
+| **Остаточные промахи** — объявления не из локации поиска внутри больших кластеров одинаковых заголовков: признаков, отличающих нужный дубль от близнецов, нет | Не устранимо признаками; частично смягчается гео-рангом внутри кластера и «near»-списком |
+| **Обучение FlagEmbedding падало по памяти** на полном батче (плотный тензор `batch × seq × 250k` для sparse-головы, полный тензор ColBERT-скоров) | Экономные по памяти подмены (`sparse_embedding_lowmem`, `colbert_score_chunked`) с тестами на эквивалентность значений и градиентов |
+
+---
+
+## Использованные open-source компоненты
+
+| Компонент | Использование | Лицензия |
+|---|---|---|
+| [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (ревизия зафиксирована в `configs/models.yaml`) | dense + sparse + ColBERT энкодер, дообучен локально | MIT |
+| [FlagEmbedding](https://github.com/FlagOpen/FlagEmbedding) | инференс bge-m3 и тренер (dense + sparse + ColBERT совместно) | MIT |
+| PyTorch, Hugging Face `transformers`, `accelerate` | код модели, цикл обучения | BSD / Apache-2.0 |
+| [CatBoost](https://catboost.ai) | ранкер (YetiRank) | Apache-2.0 |
+| [pymorphy3](https://github.com/no-plagiarism/pymorphy3) | лемматизация русского текста | MIT |
+| [gdown](https://github.com/wkentaro/gdown) | скачивание весов с Google Drive | MIT |
+| polars, pandas, pyarrow, NumPy, SciPy | обработка данных, разреженный BM25 | BSD / Apache-2.0 |
+
+Многополевой BM25, RRF, слияние пула, банк признаков, майнинг негативов и протокол валидации написаны для этой задачи.
+Внешние API во время работы не вызываются.
+
+---
+
+## Воспроизведение обучения
+
+Веса в репозитории не хранятся; ниже — цикл, которым они получены (для проверки решения он не нужен: достаточно
+`predict.py`). Понадобится GPU на 24 ГБ для шага 4. Шаг 5 считает признаки порциями по `pool.query_chunk` запросов,
+пиковая RAM зависит от размера hold-out'а (для `val`, 2 500 запросов, — 13 ГБ; для `ranker` — 8 000 запросов — больше).
+Все шаги пишут в `--work-dir`, шаги 2 и 4 возобновляемы.
+
+```bash
+pip install -r requirements.txt && pip install -e . pytest
+pytest tests                                              # юнит-тесты (CPU)
+
+D="--data-dir /path/to/data --work-dir /path/to/work"
+python scripts/train/01_prepare_data.py $D                # hold-out'ы, лемматизация, очистка train        (CPU, ~15 мин)
+python scripts/train/02_mine_bm25_negatives.py $D         # BM25-половина пула жёстких негативов            (CPU, ~25 мин)
+python scripts/train/03_mine_dense_negatives.py $D        # негативы zero-shot bge-m3 + файл обучения       (GPU, ~15 мин)
+python scripts/train/04_train_biencoder.py $D             # 2 эпохи + пересбор негативов между ними         (GPU, ~4.3 ч на 24 ГБ)
+python scripts/train/05_build_features.py $D --stage ranker   # пул и признаки для обучения ранкера         (GPU+CPU)
+python scripts/train/05_build_features.py $D --stage val      # ... и для измерения качества
+python scripts/train/06_train_ranker.py $D                # CatBoost + Recall@50 на val → work/ranker_report.json
+
+# инференс с собственными весами
+python predict.py --data-dir /path/to/data --encoder-dir /path/to/work/biencoder_ft/epoch2 \
+                  --ranker-model /path/to/work/catboost_ranker.cbm
+```
+
+Гиперпараметры — в `configs/pipeline.yaml`; они подобраны на валидации (веса полей BM25 и веса RRF — перебором по сетке,
+остальные — по протоколу выше). Порядок обучения зафиксирован сидом, но GPU-обучение не бит-в-бит воспроизводимо.
+
+## Структура репозитория
+
+```
+predict.py               инференс (точка входа для проверяющего)
+configs/                 pipeline.yaml — гиперпараметры; models.yaml — ревизия bge-m3, ссылки и sha256 весов
+reference/answer.csv     отправленный ответ (для сверки)
+scripts/train/           шаги обучения 01 … 06
+avito_rec_sys/
+  data/                  загрузка, нормализация запросов, парсер параметров, очистка train, hold-out'ы, лемматизация
+  features/              многополевой BM25, таблицы объявлений/запросов, лог-сигналы, банк признаков
+  retrieval/             обёртка bge-m3, хранилище закодированного корпуса, туры dense/sparse, RRF, слияние пула
+  pipeline/              стадии (val / ranker / benchmark) и генерация кандидатов с признаками
+  ranking/               CatBoost-ранкер и отбор топ-K
+  training/              дообучение bge-m3, майнинг жёстких негативов, заморозка слоёв
+  inference/             загрузка и проверка весов, запись и валидация answer.csv
+  eval/                  Recall@K и разбивка по стратам
+tests/                   юнит-тесты и сквозной тест конвейера кандидатов на синтетических данных
+```

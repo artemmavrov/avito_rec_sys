@@ -1,15 +1,8 @@
-"""Feature bank for (query, candidate) pairs (§4).
+"""Feature bank for (query, candidate) pairs: the lexical / geo / category / quality / log part.
 
-`build_features` takes the candidate pairs from the lexical tour and returns
-one pandas frame with the non-neural part of the bank. Neural columns
-(dense_cos, sparse_score, colbert_maxsim, ce_logit, cos_query_microcat_
-centroid) are added by the GPU stages through `extra_columns` and appended to
-`FEATURE_COLUMNS` there.
-
-Deviations from §4's list, all cheap, all in the non-neural part:
-  + query_seen_in_train, log_qitem_count, log_bridge_count  (log signals, §1)
-  + bm25f_rank_in_pool, bm25f_over_max                       (pool-relative)
-  - the 5 neural columns listed above (added later)
+`build_features` takes the candidate pairs from the lexical scorer and returns one pandas frame.
+The neural columns (dense_cos, sparse_score, colbert_maxsim, cos_query_microcat_centroid) and the
+pool-relative ones are added in `pipeline/candidates.py`.
 """
 
 from __future__ import annotations

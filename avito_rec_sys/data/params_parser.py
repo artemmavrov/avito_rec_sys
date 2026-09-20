@@ -1,4 +1,4 @@
-"""Whitelist-based parser for `item_infm_params_text` (§3.2).
+"""Whitelist-based parser for `item_infm_params_text`.
 
 The raw field is a flat, undelimited "Key1 Value1 Key2 Value2 ..." string
 (Avito's own attribute schema, one key/value run per attribute). There is no
@@ -7,31 +7,16 @@ only way to segment it is to know the set of possible key strings and scan
 for their occurrences.
 
 WHITELIST is the small set of keys worth keeping: the query side only ever
-filters on service type (`Вид услуги`, `Тип услуги`, `Кто оказывает услуги`),
-so those are the only item-side fields with matching vocabulary to the query
-tower. Everything else (addresses, price lists, schedules) is noise that
-eats the 128-token budget without helping any query match it.
+filters on service type, so those are the only item-side fields whose
+vocabulary matches the query text. Everything else (addresses, price lists,
+schedules) is noise that eats the token budget without helping any query
+match it.
 
-SPLIT_KEYS is the delimiter vocabulary needed to correctly bound each
-matched key's value (i.e. to know where it ends). It does not need to be
-exhaustive -- it needs the keys that plausibly follow a whitelisted key in
-the raw text, so a whitelisted value doesn't swallow the next field's
-content. This list is the one from reports/02_architectures.md §3.2 (mined
-by the report-01 EDA off a 40k-item sample).
-
-§11 risk 2 called for re-harvesting this list on the full corpus. That was
-attempted (see reports/03_implementation_notes.md) with a branching-entropy
-heuristic (grow a candidate key word-by-word from a known-key boundary,
-accept it once the next-word distribution becomes diverse). The result was
-dominated by false positives -- common VALUE phrases (car brands: "Lotus",
-"Bajaj"; appliance brands: "Sony", "Bosch"; service names: "Компьютерная
-помощь") also have diverse continuations, because the schema often follows
-one enumerated value with another equally free field. Unsupervised
-segmentation of an undelimited key/value schema without ground truth is a
-harder problem than the whitelist actually needs solved: the 5 whitelisted
-keys already terminate correctly against this seed list (verified against
-the report's own worked example below), so the seed list ships as-is rather
-than risk contaminating SPLIT_KEYS with brand names as spurious delimiters.
+SPLIT_KEYS is the delimiter vocabulary needed to bound each matched key's
+value (to know where it ends). It does not need to be exhaustive: it needs
+the keys that plausibly follow a whitelisted key, so that a whitelisted value
+does not swallow the next field's content. It was mined from a 40k-item
+sample of the corpus.
 """
 
 from __future__ import annotations
@@ -88,7 +73,7 @@ def extract_whitelisted(
     """Return only the whitelisted key/value pairs, as `Key Value Key Value ...`.
 
     Segments are de-duplicated (price lists repeat the same service name
-    across several price tiers, §3.2) while preserving first-seen order.
+    across several price tiers) while preserving first-seen order.
     """
     pairs = parse_params(text, key_regex)
     seen: set[tuple[str, str]] = set()
@@ -106,9 +91,9 @@ def extract_whitelisted(
 
 
 def build_item_tower_text(title: str | None, params_text: str | None) -> str:
-    """Item-tower input: title + whitelist-filtered params (§3.1).
+    """Item-tower input: title + whitelist-filtered params.
 
-    This exact string is also the §5.2/§5.3 dedup/denoise KEY (full item-
+    This exact string is also the dedup/denoise KEY (full item-
     tower text, not title alone) -- if two items produce the same string
     here, the encoder would see an identical input for both, so they must
     not both be kept as distinct train pairs / negatives for the same query.

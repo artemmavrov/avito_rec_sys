@@ -45,7 +45,7 @@ def test_click_centroids_cover_locations_without_items():
 def test_add_pool_features_ranks_gaps_and_row_order():
     import pandas as pd
 
-    from avito_rec_sys.inference.neural_pipeline import POOL_COLUMNS, add_pool_features
+    from avito_rec_sys.pipeline.candidates import POOL_COLUMNS, add_pool_features
 
     feats = pd.DataFrame({
         "q": np.array([0, 0, 0, 1, 1], dtype=np.int32),

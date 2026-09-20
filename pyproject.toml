@@ -1,11 +1,11 @@
 [project]
 name = "avito-rec-sys"
-version = "0.1.0"
+version = "1.0.0"
+description = "Candidate generation for Avito service search: bge-m3 + BM25 tours, CatBoost ranker"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["gpu: needs a CUDA GPU (local RTX 3050 smoke tests)"]
 
 [build-system]
 requires = ["setuptools>=68"]

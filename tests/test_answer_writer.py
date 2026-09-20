@@ -1,4 +1,4 @@
-from avito_rec_sys.inference.answer_writer import write_answer
+from avito_rec_sys.inference.answer import write_answer
 from avito_rec_sys.inference.validator import validate_answer
 
 A, B, C = "a" * 16, "b" * 16, "0123456789abcdef"
@@ -45,3 +45,12 @@ def test_validator_rejects_wrong_header(tmp_path):
     p = tmp_path / "h.csv"
     p.write_text("id,answer\n", encoding="utf-8")
     assert validate_answer(p, QIDS, CORPUS)
+
+
+def test_compare_answers(tmp_path):
+    from avito_rec_sys.inference.answer import compare_answers
+
+    write_answer(tmp_path / "a.csv", ["q1", "q2"], {"q1": ["a", "b"], "q2": ["c"]})
+    write_answer(tmp_path / "b.csv", ["q1", "q2"], {"q1": ["a", "x"], "q2": ["c"]})
+    out = compare_answers(tmp_path / "a.csv", tmp_path / "b.csv")
+    assert out["identical_sets"] == 0.5 and abs(out["mean_jaccard"] - (1 / 3 + 1) / 2) < 1e-9

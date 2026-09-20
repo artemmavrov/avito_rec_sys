@@ -78,3 +78,11 @@ def test_corpus_contains_positives_and_cold_ratio():
     corpus = build_corpus(res.val.positive_items, empty_bench)
     assert set(res.val.qrels["item_id"].to_list()) <= set(corpus["item_id"].to_list())
     assert cold_start_ratio(corpus, res.train_part) == 1.0
+
+
+def test_positive_items_order_is_deterministic():
+    """The master corpus (and with it every encoded store) is aligned by row order, so the order of
+    the positives must not depend on hash-table iteration order."""
+    a, b = _split(), _split()
+    assert a.val.positive_items["item_id"].to_list() == b.val.positive_items["item_id"].to_list()
+    assert a.ranker.qrels["item_id"].to_list() == b.ranker.qrels["item_id"].to_list()

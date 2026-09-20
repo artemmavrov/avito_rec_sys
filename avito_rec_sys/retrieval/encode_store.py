@@ -2,15 +2,10 @@
 
     dense    (N, 1024) fp16 .npy       -- loaded into RAM (0.4 GB for 190k items)
     sparse   scipy CSR (N, 250002)     -- lexical weights, loaded into RAM
-    colbert  ragged fp16 memmap        -- NEVER loaded whole (§8)
+    colbert  ragged fp16 memmap        -- never loaded whole
 
-Note on size: bge-m3's ColBERT vectors are 1024-d (colbert_dim=-1 keeps the
-hidden size), so the store is ~total_tokens x 2 KB, not the 128-d figure
-assumed in reports/02_architectures.md §6.2. Ragged storage keeps it to the
-tokens that actually exist (~20 GB for the benchmark corpus); still a
-memmap, still fits the 240 GB disk.
-
-Encoding is chunked so RAM stays flat regardless of corpus size.
+bge-m3's ColBERT vectors are 1024-d, so the store is ~total_tokens x 2 KB (~20 GB for the benchmark
+corpus). Encoding is chunked so RAM stays flat regardless of the corpus size.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import scipy.sparse as sp
 
-from avito_rec_sys.retrieval.colbert_narrow import (
+from avito_rec_sys.retrieval.colbert_store import (
     ColbertStore, ColbertWriter, SubsetColbertStore, load_colbert_store,
 )
 from avito_rec_sys.retrieval.encoders import EncodedBatch, encode_bi_encoder
@@ -83,3 +78,11 @@ def load_store(out_dir: Path) -> CorpusStore:
         sp.load_npz(out_dir / "sparse.npz").tocsr(),
         load_colbert_store(out_dir / "colbert.bin", DENSE_DIM),
     )
+
+
+def load_or_build_store(model, texts: list[str], out_dir: Path, max_length: int, batch_size: int = 128) -> CorpusStore:
+    """Load the store from `out_dir` if a complete one is there, else encode `texts` and write it.
+    `sparse.npz` is written last, so an interrupted build is never mistaken for a finished one."""
+    if (out_dir / "sparse.npz").exists():
+        return load_store(out_dir)
+    return build_store(model, texts, out_dir, max_length, batch_size)

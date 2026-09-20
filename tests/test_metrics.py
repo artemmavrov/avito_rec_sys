@@ -1,4 +1,4 @@
-from avito_rec_sys.eval.metrics import ceiling_curve, per_query_recall, recall_at_k, stratified_recall
+from avito_rec_sys.eval.metrics import per_query_recall, recall_at_k, stratified_recall
 
 
 def test_task_description_example():
@@ -28,14 +28,6 @@ def test_stratified():
     assert out["new"] == (0.25, 2)
 
 
-def test_ceiling_curve_union_beats_each_tour():
+def test_per_query_recall():
     qrels = {"A": {"a1", "a2"}}
-    tours = {
-        "bm25": {"A": ["a1", "x"]},
-        "dense": {"A": ["y", "a2"]},
-    }
-    curve = ceiling_curve(tours, qrels, ks=(2,))
-    assert curve["bm25"][2] == 0.5
-    assert curve["dense"][2] == 0.5
-    assert curve["union"][2] == 1.0
-    assert per_query_recall(tours["bm25"], qrels, 2) == {"A": 0.5}
+    assert per_query_recall({"A": ["a1", "x"]}, qrels, 2) == {"A": 0.5}

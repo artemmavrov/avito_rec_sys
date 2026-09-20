@@ -54,10 +54,6 @@ def tokens(column: pl.Series) -> list[list[str]]:
     return [s.split() if s else [] for s in column.to_list()]
 
 
-def id_index(ids: pl.Series) -> dict[str, int]:
-    return {v: i for i, v in enumerate(ids.to_list())}
-
-
 def group_positions(values: np.ndarray) -> dict:
     """value -> np.ndarray of row positions (used for per-location / per-microcat pools)."""
     order = np.argsort(values, kind="stable")

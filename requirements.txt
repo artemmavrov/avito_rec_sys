@@ -1,26 +1,27 @@
-# Versions the code was developed and tested with (Python 3.12).
+# Python 3.12. Versions the solution was developed and tested with.
 
-# Data / numerics
+# data / numerics
 polars==1.40.1
 pandas==2.2.3
 pyarrow==21.0.0
 numpy==2.2.5
 scipy==1.15.2
+pyyaml==6.0.2
 
-# Ranking
+# ranking
 catboost==1.2.8
 
 # Russian lemmatization
 pymorphy3==2.0.6
 pymorphy3-dicts-ru==2.4.417150.4580142
 
-# Neural retrieval / reranking: bge-m3 + bge-reranker-v2-m3
-torch==2.6.0            # CUDA build: pip install torch --index-url https://download.pytorch.org/whl/cu124
+# neural retrieval: bge-m3 (torch: use the CUDA wheel matching your driver,
+# e.g. pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124)
+torch==2.6.0
 transformers==5.5.1
-FlagEmbedding==1.4.2    # bge-m3 inference wrapper and its unified dense+sparse+ColBERT fine-tuning trainer
-accelerate==1.15.0      # required by the HF Trainer that FlagEmbedding builds on
+FlagEmbedding==1.4.2
+accelerate==1.15.0      # needed by the trainer inside FlagEmbedding (training only)
 huggingface_hub
 
-# Config / tests
-pyyaml==6.0.2
-pytest==8.3.3
+# downloading the released weights from Google Drive
+gdown

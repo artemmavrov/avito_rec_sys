@@ -1,4 +1,4 @@
-"""Layer freezing shared by the bi-encoder and the cross-encoder (§5.1).
+"""Layer freezing for the bi-encoder.
 
 Frozen: the token-embedding table (250k x 1024 = 256M params, 45% of the
 model -- a lookup, so freezing costs almost no quality but saves ~4 GB of
@@ -7,9 +7,8 @@ optimizer state and the sparse gradient scatter) and the lowest
 transfer). Everything above, plus heads, trains.
 
 Works on any HF XLM-R style encoder: parameters are matched by name
-(`embeddings.` and `encoder.layer.<i>.`), so it applies equally to the bare
-`XLMRobertaModel` inside the bge-m3 wrapper and to
-`XLMRobertaForSequenceClassification` (whose encoder sits under `roberta.`).
+(`embeddings.` and `encoder.layer.<i>.`), so it applies to the bare `XLMRobertaModel` inside the
+bge-m3 wrapper.
 """
 
 from __future__ import annotations

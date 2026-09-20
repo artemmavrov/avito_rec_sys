@@ -1,4 +1,4 @@
-"""Three-step train cleaning pipeline (§5.2).
+"""Three-step cleaning of the training pairs.
 
     0. normalize query
     1. dedup (normalized_query, item_id) -- exact repeated pairs
@@ -9,7 +9,7 @@
        pathological tail (one query had 6,540 pairs) without dropping any
        query entirely
 
-Each step returns row counts so the reduction can be reported (§5.2 table).
+Each step returns row counts so the reduction can be reported.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def clean_train(df: pl.DataFrame, cap_per_query: int = 16, seed: int = 42) -> tu
     n_after_pair_dedup = df.height
 
     # Step 2: dedup (query, item_tower_text) -- different item_id, identical
-    # encoder input. Key is the full tower text, not the title alone (§5.2).
+    # encoder input. Key is the full tower text, not the title alone.
     df = df.unique(subset=["search_query_norm", "item_tower_text"], keep="first", maintain_order=True)
     n_after_tower_dedup = df.height
 

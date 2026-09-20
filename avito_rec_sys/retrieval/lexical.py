@@ -1,5 +1,5 @@
 """Lexical retrieval tour: multi-field BM25 with a local (same-location) and a
-global ranking, plus per-pair field scores for the ranker (§1, §6.3).
+global ranking, plus per-pair field scores for the ranker.
 
 For every query we keep
   - a global ranking over the whole corpus (used for the ceiling curve),

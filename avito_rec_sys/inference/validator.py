@@ -1,4 +1,4 @@
-"""Standalone validator for answer.csv (§11 risk 7).
+"""Standalone validator for answer.csv.
 
 Malformed item_ids never raise an error at submission time -- the metric just
 silently drops. So every rule from task_description.md is checked here

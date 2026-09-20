@@ -1,4 +1,4 @@
-from avito_rec_sys.retrieval.rrf import rrf_fuse, tune_rrf_weights
+from avito_rec_sys.retrieval.rrf import rrf_fuse
 
 
 def test_agreement_beats_single_tour_top():
@@ -22,16 +22,3 @@ def test_large_k_flattens_rank_gap():
     tours = {"a": ["solo", "p", "q", "both"], "b": ["r", "s", "t", "u", "both"]}
     assert rrf_fuse(tours, {}, k=1)[0] == "solo"
     assert rrf_fuse(tours, {}, k=200)[0] == "both"
-
-
-def test_tuning_downweights_useless_tour():
-    qrels = {f"q{i}": {f"good{i}"} for i in range(20)}
-    tours_per_query = {
-        qid: {
-            "good_tour": [f"good{qid[1:]}", "n1", "n2"],
-            "junk_tour": ["j1", "j2", "j3"],
-        }
-        for qid in qrels
-    }
-    w = tune_rrf_weights(tours_per_query, qrels, ["good_tour", "junk_tour"], pool_k=1)
-    assert w["good_tour"] >= w["junk_tour"]

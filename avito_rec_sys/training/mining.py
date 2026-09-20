@@ -1,17 +1,15 @@
-"""Dense hard-negative mining over the training items (§5.3 / §5.5).
+"""Hard-negative mining over the training items for bi-encoder fine-tuning.
 
-Shared by the bi-encoder (zero-shot mining, then the ANCE-style refresh with
-the epoch-1 model; 2 negatives from ranks 10-200) and the cross-encoder
-(fine-tuned retriever, 4 negatives from ranks 5-300).
+Used twice: with the zero-shot encoder, then again with the epoch-1 model to refresh the negatives
+(ANCE-style). Negatives are 2 per positive from ranks 10-200 of a hybrid ranking.
 
-Mining is a matmul over pre-encoded vectors, not an encoder pass, so it is
-cheap; the encoding of the mining corpus is the only real cost and is done
-by the caller-provided `model`.
+Mining is a matmul over pre-encoded vectors, not an encoder pass, so it is cheap; the encoding of
+the mining corpus is the only real cost and is done by the caller-provided `model`.
 
-§5.3 asks for a BM25 + dense hybrid pool. The BM25 half costs ~25 min of CPU
-over ~150k training queries, so it is precomputed once, off the GPU budget, by
-scripts/s03b_mine_bm25_negatives.py and merged here (`bm25_top`) by RRF with
-the dense ranking. Without it, `mine` falls back to the dense ranking alone.
+The hybrid ranking is the RRF of the dense ranking and a BM25 ranking. The BM25 half costs ~25 min
+of CPU over ~150k training queries, so it is precomputed once by
+scripts/train/02_mine_bm25_negatives.py and merged here (`bm25_top`). Without it, `mine` falls back
+to the dense ranking alone.
 """
 
 from __future__ import annotations

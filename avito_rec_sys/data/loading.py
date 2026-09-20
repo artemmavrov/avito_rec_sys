@@ -1,7 +1,6 @@
 """Parquet loaders for train / benchmark data.
 
-Uses polars for speed on the ~500k-row train file (§8: "train.parquet читать
-через polars/pyarrow, не pandas с object-колонками"). decimal128 price/lat/lon
+Uses polars for speed on the ~500k-row train file. decimal128 price/lat/lon
 columns are cast to float64 on load -- decimal dtypes are exact but every
 downstream consumer (numpy, catboost, torch) wants float anyway, and carrying
 decimal128 through the pipeline just adds silent-cast risk later.
@@ -19,7 +18,7 @@ _DECIMAL_COLUMNS = ["item_price", "item_latitude", "item_longitude"]
 
 # item_id / query_id must stay strings everywhere (16 lowercase hex chars) --
 # never let them round-trip through anything that could turn them into
-# numbers (§8, §11 risk 7).
+# numbers.
 _ID_COLUMNS = ["item_id", "query_id"]
 
 

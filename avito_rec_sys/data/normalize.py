@@ -1,12 +1,10 @@
 """Text normalization primitives.
 
 Two distinct normalized forms are used downstream, and they must NOT be
-confused (§4, §5.2 explicitly call out that these are different keys for
-different purposes):
+confused (they are different keys for different purposes):
 
   - `normalize_query` (word-sorted): the query-paraphrase key. Used for
-    §5.2 step-1 pair dedup, the §9 validation split key, and the §5.2/§5.3
-    tower-text denoise key. Sorting is required because "установка сэндвич
+    pair dedup, the validation split key and the hard-negative denoise key. Sorting is required because "установка сэндвич
     панели" and "сэндвич панели установка" must collapse to the same key.
   - `normalize_title` (order-preserving): the duplicate-CLUSTER feature key
     (features/duplicates.py). Titles aren't paraphrased the way queries are,

@@ -1,24 +1,25 @@
-# Model ids pinned to a specific HF revision sha, fetched at build time via:
-#   HfApi().model_info("BAAI/bge-m3").sha
-# Pinning avoids silent drift if the checkpoint on HF is updated later --
-# without `revision=`, reproducibility for the grader is not guaranteed.
-#
-# Fetched on 2026-09-19.
-
+# Open-source base model, pinned to a revision so that the downloaded tokenizer / config cannot drift.
 bi_encoder:
   name: "BAAI/bge-m3"
   revision: "5617a9f61b028005a4858fdac845db406aefb181"
-  n_layers: 24
-  hidden_size: 1024
-  # bge-m3 prefixing: unlike bge-v1.5, bge-m3 does NOT require an
-  # "instruction:" prefix for queries -- confirm against the FlagEmbedding
-  # README at implementation/training time (§11 risk 3). Left explicit here
-  # so it's a one-line change if that assumption turns out wrong.
-  query_instruction: ""
-  passage_instruction: ""
 
-reranker:
-  name: "BAAI/bge-reranker-v2-m3"
-  revision: "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
-  n_layers: 24
-  hidden_size: 1024
+# Weights produced by this repository's training pipeline, published on Google Drive
+# (folder: https://drive.google.com/drive/folders/1YdR1OndTeS1mNKDCkiLKo5DTFA_G6Cfv).
+# `predict.py` downloads them with gdown and verifies the sha256.
+weights:
+  folder_url: "https://drive.google.com/drive/folders/1YdR1OndTeS1mNKDCkiLKo5DTFA_G6Cfv"
+  # fine-tuned bge-m3: transformer + the sparse and ColBERT heads; config / tokenizer come from the base model
+  encoder:
+    model.safetensors:
+      gdrive_id: "1frzY9ROrG2OSc7f5d5TzOzTT6j32-AZa"
+      sha256: "705dbbbd31b0affbce783e2713e8bfa7bee503ec45b375b7595a84b0bed181c3"
+    sparse_linear.pt:
+      gdrive_id: "1AB7WZvBhd3cuZJZjNpAk4lNUTHoLhCyh"
+      sha256: "fe8640dbf7b2480890723ef018269c0f3ceb203166e7a2a2dfeb24851cf5a233"
+    colbert_linear.pt:
+      gdrive_id: "1BsCQAGcrDAGHukfokJIMIuAXWqWDPqxL"
+      sha256: "975b894da047308c74d35c41bf6a2594bb90ded18c2dc821d73afce2403ae59b"
+  ranker:
+    catboost_final_k600.cbm:
+      gdrive_id: "1oiFl5wOFb60edRJ8hEIQ04g_yYs_O0tZ"
+      sha256: "25b963f7116ea6a7253226d428cc829107f196787ed3761262f1e613aab1d20a"

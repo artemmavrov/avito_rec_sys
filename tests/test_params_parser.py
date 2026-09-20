@@ -2,7 +2,7 @@ from avito_rec_sys.data.params_parser import extract_whitelisted, parse_params
 
 
 def test_doc_worked_example():
-    # reports/02_architectures.md §3.2 "ДО / ПОСЛЕ" example.
+    # worked example: a raw params string before / after whitelist filtering
     raw = (
         "Вид услуги Компьютерная помощь Место оказания услуг пр-т Ленина "
         "Тип стоимости за услугу Начальная цена График работы от 34200 "

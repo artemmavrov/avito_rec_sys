@@ -1,15 +1,7 @@
-"""bge-m3 wrapper: dense + sparse + ColBERT in one encoder pass (§1, §2.1).
+"""bge-m3 wrapper: dense + sparse + ColBERT representations in one encoder pass.
 
-Thin adapter over `FlagEmbedding.BGEM3FlagModel` so the rest of the pipeline
-depends on our own return shapes, not FlagEmbedding's dict format. The model
-revision is pinned in configs/models.yaml (§2.1) -- resolved to a local
-snapshot path via huggingface_hub so `from_pretrained` can't silently pick up
-a newer HF revision than the one recorded there.
-
-§11 risk 3: bge-m3, unlike bge-v1.5, uses NO "query:"/"passage:" instruction
-prefix (query_instruction is "" in models.yaml). This is asserted, not just
-assumed -- `load_bi_encoder` fails loudly if models.yaml ever sets a
-non-empty instruction without a matching code change here.
+A thin adapter over `FlagEmbedding.BGEM3FlagModel`, so the rest of the pipeline depends on our own
+return shapes. bge-m3 needs no "query:" / "passage:" instruction prefix.
 """
 
 from __future__ import annotations
@@ -36,11 +28,6 @@ def load_bi_encoder(models_cfg: dict, device: str = "cuda", use_fp16: bool = Tru
     from FlagEmbedding import BGEM3FlagModel
 
     cfg = models_cfg["bi_encoder"]
-    if cfg["query_instruction"] or cfg["passage_instruction"]:
-        raise NotImplementedError(
-            "models.yaml sets a non-empty bge-m3 instruction prefix, but load_bi_encoder "
-            "does not apply one yet -- update this function before changing that config value."
-        )
     path = model_path or resolve_snapshot(cfg["name"], cfg["revision"])
     return BGEM3FlagModel(path, use_fp16=use_fp16, devices=device)
 
@@ -72,19 +59,3 @@ def encode_dense(model, texts: list[str], batch_size: int, max_length: int) -> n
         return_dense=True, return_sparse=False, return_colbert_vecs=False,
     )
     return out["dense_vecs"].astype(np.float32)
-
-
-def sparse_score(q: dict[int, float], d: dict[int, float]) -> float:
-    """bge-m3's own sparse (lexical) score: dot product over shared token ids."""
-    if len(q) > len(d):
-        q, d = d, q
-    return float(sum(w * d[t] for t, w in q.items() if t in d))
-
-
-def colbert_maxsim(q: np.ndarray, d: np.ndarray) -> float:
-    """Sum of max cosine similarity per query token (bge-m3's late-interaction score).
-    Vectors are already L2-normalized by the encoder."""
-    if q.size == 0 or d.size == 0:
-        return 0.0
-    sims = q.astype(np.float32) @ d.astype(np.float32).T
-    return float(sims.max(axis=1).sum())

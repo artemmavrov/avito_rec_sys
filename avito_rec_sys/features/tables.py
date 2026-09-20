@@ -18,7 +18,7 @@ from avito_rec_sys.data.params_parser import parse_params
 
 def location_centroids(items: pl.DataFrame) -> dict[int, tuple[float, float]]:
     """Mean (lat, lon) per item location. Callers pass only items that are
-    legal for the split at hand (§9.3: no held-out positives)."""
+    legal for the split at hand (no held-out positives)."""
     g = (
         items.drop_nulls(["item_latitude", "item_longitude"])
         .group_by("item_location_id")
@@ -62,7 +62,7 @@ class ItemTable:
         self.microcat_positions = group_positions(self.microcat)
         self.microcat_size = {k: len(v) for k, v in self.microcat_positions.items()}
 
-        # duplicate clusters: same normalized title (§4 -- title key, NOT tower text)
+        # duplicate clusters: same normalized title (title key, NOT the encoder tower text)
         title_norm = items["title_norm"].to_list()
         codes: dict[str, int] = {}
         self.cluster = np.empty(self.n, dtype=np.int64)

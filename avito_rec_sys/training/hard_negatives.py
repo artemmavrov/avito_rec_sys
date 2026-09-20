@@ -1,4 +1,4 @@
-"""Stratified hard-negative mining + denoising (§5.3).
+"""Stratified hard-negative mining + denoising.
 
 Negatives are sampled by RANK QUANTILE within [rank_min, rank_max] of a
 zero-shot (or current) retriever's ranking, not "top-N hardest" -- a
@@ -8,7 +8,7 @@ else about the overall preference structure.
 Denoising: any candidate whose full item-tower text matches the positive's
 tower text is dropped -- if the encoder input is identical, the pair is
 unsolvable and training on it would teach the model to separate the
-inseparable (§5.3, same key as §5.2 step 2 dedup).
+inseparable (same key as the step-2 dedup in data/clean_train.py).
 """
 
 from __future__ import annotations

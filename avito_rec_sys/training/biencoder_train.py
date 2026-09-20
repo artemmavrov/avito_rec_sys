@@ -1,15 +1,14 @@
-"""bge-m3 fine-tuning (§5.4) on top of FlagEmbedding's own M3 trainer.
+"""bge-m3 fine-tuning on top of FlagEmbedding's own M3 trainer.
 
 Reimplementing bge-m3's joint dense + sparse + ColBERT loss (with
 self-distillation) from scratch is a high-risk way to lose points silently,
-so we reuse `EncoderOnlyEmbedderM3Runner` and add only what the spec needs
-on top of it:
+so we reuse `EncoderOnlyEmbedderM3Runner` and add only what is needed on top of it:
   * our data pipeline (cleaned pairs + stratified, denoised hard negatives),
-  * the layer-freezing scheme of §5.1 (FlagEmbedding only offers all-or-nothing
+  * the layer-freezing scheme (FlagEmbedding only offers all-or-nothing
     `fix_encoder`),
   * hyper-parameters from configs/pipeline.yaml.
 
-FlagEmbedding is MIT licensed; it is listed in README.md as required.
+FlagEmbedding is MIT licensed; it is listed in README.md.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from avito_rec_sys.training.freezing import freeze_encoder_layers
 
 
 def query_tower_text(query: str | None, params: str | None) -> str:
-    """Query-tower input (§3.1): search text + raw filter text (already query-like)."""
+    """Query-tower input: search text + raw filter text (already query-like)."""
     q = (query or "").strip()
     p = (params or "").strip()
     return f"{q} {p}".strip()
@@ -100,7 +99,7 @@ def build_arguments(
         weight_decay=t["weight_decay"],
         adam_beta1=t["betas"][0],
         adam_beta2=t["betas"][1],
-        adam_epsilon=t["eps"],  # 1e-6, not 1e-8: below bf16 resolution (§5.4)
+        adam_epsilon=t["eps"],  # 1e-6, not 1e-8: below bf16 resolution
         max_grad_norm=t["max_grad_norm"],
         lr_scheduler_type="linear",
         warmup_steps=max(1, int(t["warmup_ratio"] * total_steps)),
@@ -108,7 +107,7 @@ def build_arguments(
         fp16=t["precision"] == "fp16",
         gradient_checkpointing=t["gradient_checkpointing"],
         temperature=t["temperature"],
-        save_steps=t["checkpoint_every_steps"],  # no ECC on a 3090: checkpoint often (§11)
+        save_steps=t["checkpoint_every_steps"],  # checkpoint often
         save_total_limit=3,
         logging_steps=10,
         report_to="none",
@@ -119,7 +118,7 @@ def build_arguments(
         use_self_distill=True,
         fix_encoder=False,  # freezing is layer-wise below
         dataloader_num_workers=2,
-        resume_from_checkpoint=_latest_checkpoint(output_dir),  # crash-safe: a rerun continues (§11)
+        resume_from_checkpoint=_latest_checkpoint(output_dir),  # crash-safe: a rerun continues
     )
     return model_args, data_args, training_args
 
